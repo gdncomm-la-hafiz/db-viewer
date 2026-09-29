@@ -1,0 +1,9 @@
+secrets.env
+data/
+audit.log
+__pycache__/
+.pytest_cache/
+.superpowers/
+.junior-credentials
+config.yaml
+docs/

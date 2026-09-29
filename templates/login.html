@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block body %}
+<style>
+  .login { display:grid; place-items:center; min-height:100vh; padding:16px;
+           background:radial-gradient(60% 50% at 50% 0%, var(--brand-soft), transparent 70%), var(--bg); }
+  .login form { width:min(380px, 100%); padding:28px; gap:18px; box-shadow:var(--shadow-pop); }
+  .login .mark { width:36px; height:36px; border-radius:10px; display:grid; place-items:center;
+                 background:var(--brand-soft); color:var(--brand); border:1px solid var(--brand-line); margin-bottom:14px; }
+  .login .mark svg.i { width:20px; height:20px; }
+  .login label { display:grid; gap:6px; font-size:13px; color:var(--fg-2); }
+  .login input { width:100%; height:36px; }
+  .login button.primary { width:100%; height:36px; justify-content:center; }
+  .login .foot { display:flex; gap:6px; align-items:center; justify-content:center; font-size:12px; margin:0; }
+</style>
+<main class="login">
+  <form method="post" action="/login" class="card stack">
+    <div>
+      <div class="mark"><svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></div>
+      <h1>Sign in to DB Viewer</h1>
+      <p class="muted" style="margin:4px 0 0;">Read-only access to local and QA2 databases.</p>
+    </div>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <label>Username <input name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="primary">Sign in</button>
+    <p class="foot muted"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Queries run in a read-only transaction</p>
+  </form>
+</main>
+{% endblock %}

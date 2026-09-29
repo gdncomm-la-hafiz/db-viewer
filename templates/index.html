@@ -1,0 +1,594 @@
+{% extends "base.html" %}
+{% macro stale(value, options) %}{% if value and value not in options %}<option value="{{ value }}" selected>⚠ {{ value }} (not available)</option>{% endif %}{% endmacro %}
+{% block body %}
+{% set db_value = sel.instance ~ '/' ~ sel.database %}
+{% set refs = [] %}
+{% for t in query_tables %}{% for c in t.columns %}{% set _ = refs.append(t.alias ~ '.' ~ c) %}{% endfor %}{% endfor %}
+<style>
+  .shell { display:grid; grid-template-columns:272px minmax(0, 1fr); grid-template-rows:48px 1fr; height:100vh; transition:grid-template-columns .2s var(--ease); }
+  .shell.collapsed { grid-template-columns:0 minmax(0, 1fr); }
+  .shell.collapsed .sidebar { visibility:hidden; }
+  .topbar { grid-column:1 / -1; display:flex; align-items:center; gap:10px; padding:0 12px 0 14px;
+            background:var(--sidebar); border-bottom:1px solid var(--line); min-width:0; }
+  .brand { display:flex; align-items:center; gap:8px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
+  .brand .mark { width:24px; height:24px; border-radius:6px; display:grid; place-items:center; background:var(--brand-soft);
+                 color:var(--brand); border:1px solid var(--brand-line); }
+  .brand .mark svg.i { width:14px; height:14px; }
+  .crumbs { display:flex; align-items:center; gap:8px; min-width:0; color:var(--muted); }
+  .crumbs .sep { color:var(--line-strong); font-size:18px; font-weight:300; }
+  .crumbs .mono { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .crumbs .current { color:var(--fg); }
+  .pill { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 9px; border-radius:999px; font-size:12px;
+          color:var(--fg-2); border:1px solid var(--line-strong); background:var(--sunken); white-space:nowrap; }
+  .pill svg.i { width:13px; height:13px; }
+  .pill.brand { color:var(--brand-text); border-color:var(--brand-line); background:var(--brand-soft); }
+  .avatar { width:26px; height:26px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:600;
+            background:var(--brand-soft); color:var(--brand-text); border:1px solid var(--brand-line); text-transform:uppercase; }
+  .user { display:flex; align-items:center; gap:8px; margin:0; }
+  .theme-dark-only { display:none; }
+  :root[data-theme="dark"] .theme-dark-only { display:inline; }
+  :root[data-theme="dark"] .theme-light-only { display:none; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .theme-dark-only { display:inline; }
+    :root:not([data-theme="light"]) .theme-light-only { display:none; }
+  }
+
+  .sidebar { border-right:1px solid var(--line); background:var(--sidebar); padding:12px 10px; display:flex; flex-direction:column;
+             gap:10px; min-height:0; overflow:hidden; }
+  .side-head { display:flex; align-items:center; gap:6px; padding:4px 4px 0; font-size:11.5px; font-weight:500; color:var(--muted);
+               text-transform:uppercase; letter-spacing:.06em; }
+  .side-head .count { font-family:var(--mono); letter-spacing:0; text-transform:none; padding:0 6px; border-radius:999px; background:var(--sunken); border:1px solid var(--line); }
+  .side-head a { display:grid; place-items:center; width:24px; height:24px; border-radius:var(--radius-sm); color:var(--muted); }
+  .side-head a:hover { background:var(--sunken); color:var(--fg); text-decoration:none; }
+  .search { position:relative; }
+  .search svg.i { position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none; }
+  .search input { width:100%; padding-left:30px; padding-right:30px; }
+  .search kbd { position:absolute; right:8px; top:50%; transform:translateY(-50%); pointer-events:none; }
+  .search input:focus ~ kbd { display:none; }
+  .table-list { list-style:none; margin:0 -4px; padding:0 4px; overflow:auto; flex:1; min-height:0; }
+  .table-list a { position:relative; display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:var(--radius-sm);
+                  color:var(--fg-2); font-family:var(--mono); font-size:12.5px; white-space:nowrap; overflow:hidden;
+                  transition:background .12s var(--ease), color .12s var(--ease); }
+  .table-list a svg.i { color:var(--muted); width:14px; height:14px; transition:color .12s; }
+  .table-list a span.t { overflow:hidden; text-overflow:ellipsis; }
+  .table-list a .schema { color:var(--muted); }
+  .table-list a:hover { background:var(--hover); color:var(--fg); text-decoration:none; }
+  .table-list a:hover svg.i { color:var(--fg-2); }
+  .table-list a.active { background:var(--brand-soft); color:var(--fg); }
+  .table-list a.active svg.i { color:var(--brand); }
+  .table-list a.active::before { content:""; position:absolute; left:0; top:6px; bottom:6px; width:2px; border-radius:2px; background:var(--brand); }
+  .table-list .empty { padding:10px 8px; color:var(--muted); font-size:12.5px; }
+
+  /* max-content rows: cards with overflow:hidden would otherwise shrink to fit the viewport and clip the form */
+  .content { padding:20px 24px 40px; display:grid; grid-auto-rows:max-content; gap:16px; align-content:start; min-width:0; overflow:auto; }
+  .page-head { display:grid; gap:12px; }
+  .title { display:flex; align-items:center; gap:10px; min-width:0; }
+  .title .ticon { width:30px; height:30px; border-radius:var(--radius-sm); display:grid; place-items:center; flex:none;
+                  background:var(--panel); border:1px solid var(--line-strong); color:var(--fg-2); }
+  .title h1 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); }
+  .tabs a { display:inline-flex; align-items:center; gap:6px; padding:8px 10px; color:var(--muted); border-bottom:2px solid transparent;
+            margin-bottom:-1px; font-weight:500; transition:color .12s, border-color .12s; }
+  .tabs a:hover { color:var(--fg); text-decoration:none; border-bottom-color:var(--line-strong); }
+  .tabs a.active { color:var(--fg); border-bottom-color:var(--brand); }
+  .tabs a.active svg.i { color:var(--brand); }
+
+  #builder { padding:0; overflow:hidden; }
+  .section { display:grid; gap:8px; padding:14px 16px; border-top:1px solid var(--line); }
+  .section:first-of-type { border-top:0; }
+  .section-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-height:26px; }
+  .section-title { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:500; color:var(--fg-2);
+                   text-transform:uppercase; letter-spacing:.06em; }
+  .section-title svg.i { color:var(--muted); width:14px; height:14px; }
+  .hint { color:var(--muted); font-size:12px; text-transform:none; letter-spacing:0; font-weight:400; }
+  .col-filter { height:26px !important; width:180px; font-size:12px; }
+  .cols { display:flex; flex-wrap:wrap; gap:6px; }
+  label.col { gap:6px; height:26px; padding:0 10px 0 8px; border:1px solid var(--line-strong); border-radius:999px; font-size:12px;
+              color:var(--muted); background:transparent; user-select:none;
+              transition:background .12s var(--ease), border-color .12s var(--ease), color .12s var(--ease); }
+  label.col:hover { border-color:var(--muted); color:var(--fg); background:var(--sunken); }
+  label.col input { appearance:none; width:12px; height:12px; border:1px solid var(--line-strong); border-radius:3px; display:grid;
+                    place-items:center; background:var(--sunken); transition:background .12s, border-color .12s; }
+  label.col input:checked { background:var(--brand); border-color:var(--brand); }
+  label.col input:checked::after { content:""; width:6px; height:3px; border:2px solid var(--panel); border-top:0; border-right:0;
+                                   transform:translateY(-1px) rotate(-45deg); }
+  label.col:has(input:checked) { color:var(--fg); border-color:var(--brand-line); background:var(--brand-soft); }
+  label.col:has(input:focus-visible) { outline:2px solid var(--brand); outline-offset:1px; }
+  label.col[hidden] { display:none; }
+  .line-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:6px; margin:0 -6px; border-radius:var(--radius-sm);
+              transition:background .12s; }
+  .line-row:hover { background:var(--sunken); }
+  .line-row .kw { font-family:var(--mono); font-size:12px; color:var(--muted); padding:0 2px; }
+  .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 16px; border-top:1px solid var(--line); background:var(--sunken); }
+  .toolbar label.inline { display:inline-flex; gap:8px; align-items:center; color:var(--fg-2); }
+  label.switch { display:inline-flex; align-items:center; gap:8px; cursor:pointer; color:var(--fg-2); user-select:none; }
+  label.switch input { appearance:none; width:28px; height:16px; border-radius:999px; background:var(--line-strong); position:relative;
+                       transition:background .15s var(--ease); cursor:pointer; }
+  label.switch input::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%;
+                              background:#fff; transition:transform .15s var(--ease); box-shadow:0 1px 2px rgba(0,0,0,.3); }
+  label.switch input:checked { background:var(--brand); }
+  label.switch input:checked::after { transform:translateX(12px); }
+  label.switch input:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
+
+  .result-card { padding:0; overflow:hidden; }
+  .result-card > .meta { padding:10px 12px 10px 16px; border-bottom:1px solid var(--line); }
+  .result-card > .body { padding:14px 16px; display:grid; gap:12px; }
+  .result-card .table-wrap { border-radius:0; border:0; border-bottom:1px solid var(--line); max-height:62vh; }
+  .result-card .foot { padding:10px 16px; display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+  .result-card .foot details { flex:1; min-width:240px; }
+  .meta { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:13px; }
+  .meta h2 { margin:0; }
+  .empty-state { display:grid; place-items:center; text-align:center; gap:10px; padding:48px 16px; }
+  .empty-state .ticon { width:44px; height:44px; border-radius:12px; display:grid; place-items:center;
+                        background:var(--brand-soft); color:var(--brand); border:1px solid var(--brand-line); }
+  .empty-state .ticon svg.i { width:22px; height:22px; }
+  .empty-state p { max-width:52ch; }
+  .saved-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 12px; border:1px solid var(--line);
+               border-radius:var(--radius-sm); background:var(--sunken); transition:border-color .12s; }
+  .saved-row:hover { border-color:var(--line-strong); }
+  @media (max-width: 860px) {
+    .shell { grid-template-columns:1fr; grid-template-rows:auto auto 1fr; height:auto; min-height:100vh; }
+    .shell.collapsed { grid-template-columns:1fr; }
+    .shell.collapsed .sidebar { display:none; }
+    .topbar { flex-wrap:wrap; padding:8px 12px; }
+    .sidebar { border-right:0; border-bottom:1px solid var(--line); }
+    .table-list { max-height:30vh; }
+    .content { padding:16px; overflow:visible; }
+    .crumbs .db-crumb { display:none; }
+  }
+</style>
+<div class="shell" id="shell">
+  <header class="topbar">
+    <button type="button" class="ghost icon" onclick="toggleSidebar()" title="Toggle sidebar" aria-label="Toggle sidebar">
+      <svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+    </button>
+    <span class="brand"><span class="mark"><svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span>DB Viewer</span>
+    {% if environment %}<span class="badge {{ 'local' if environment|lower == 'local' else 'shared' }}">{{ environment }}</span>{% endif %}
+    <span class="crumbs">
+      {% if sel.database %}<span class="sep">/</span><span class="mono db-crumb{{ ' current' if not sel.table }}">{{ db_value }}</span>{% endif %}
+      {% if sel.table and query_tables %}<span class="sep">/</span><span class="mono current">{{ sel.table }}</span>{% endif %}
+    </span>
+    <span class="spacer"></span>
+    <span class="pill brand" title="Queries run inside BEGIN READ ONLY … ROLLBACK with a time limit">
+      <svg class="i" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Read-only</span>
+    <button type="button" class="ghost icon" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme">
+      <svg class="i theme-light-only" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      <svg class="i theme-dark-only" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <form method="post" action="/logout" class="user">
+      <span class="avatar" aria-hidden="true">{{ (user or '?')[:1] }}</span><span>{{ user }}</span>
+      <button class="ghost sm" title="Sign out">Sign out</button>
+    </form>
+  </header>
+
+  <aside class="sidebar">
+    <form method="get" action="/">
+      <select name="db" onchange="this.form.submit()" aria-label="Database" style="width:100%;">
+        <option value="">Choose a database…</option>
+        {% for inst in instances %}
+        <optgroup label="{% if inst.environment %}{{ inst.environment }} · {% endif %}{{ inst.title }}">
+          {% for d in inst.databases %}
+          <option value="{{ inst.key }}/{{ d }}" {% if sel.instance == inst.key and sel.database == d %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </form>
+    {% if browse_error %}<p class="error">{{ browse_error }}</p>{% endif %}
+    {% if tables is not none %}
+    <div class="side-head">
+      Tables <span class="count" id="table-count">{{ tables|length }}</span>
+      <span class="spacer"></span>
+      <a href="/?db={{ db_value|urlencode }}&refresh=true" title="Reload the table list" aria-label="Reload the table list">
+        <svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></svg></a>
+    </div>
+    <div class="search">
+      <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="table-search" type="search" placeholder="Filter {{ tables|length }} tables…" autocomplete="off">
+      <kbd>/</kbd>
+    </div>
+    <ul class="table-list" id="table-list">
+      {% for key in tables %}{% set parts = key.split('.', 1) %}
+      <li><a href="/?db={{ db_value|urlencode }}&table={{ key|urlencode }}&tab={{ tab }}" class="{{ 'active' if key == sel.table }}" title="{{ key }}">
+        <svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg>
+        <span class="t">{% if parts|length > 1 %}<span class="schema">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ key }}{% endif %}</span></a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </aside>
+
+  <main class="content">
+    {% if query_tables %}
+    <div class="page-head">
+      <div class="title">
+        <span class="ticon"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg></span>
+        <h1 class="mono">{{ sel.table }}</h1>
+      </div>
+      <nav class="tabs">
+        {% for key, name in [("rows", "Rows"), ("structure", "Structure"), ("indexes", "Indexes")] %}
+        <a href="/?db={{ db_value|urlencode }}&table={{ sel.table|urlencode }}&tab={{ key }}" class="{{ 'active' if tab == key }}">
+          {% if key == "rows" %}<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18"/></svg>
+          {% elif key == "structure" %}<svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
+          {% else %}<svg class="i" viewBox="0 0 24 24"><path d="m13 2-9 12h8l-1 8 9-12h-8Z"/></svg>{% endif %}{{ name }}</a>
+        {% endfor %}
+      </nav>
+    </div>
+
+    {% if tab == "rows" %}
+    <form method="post" action="/run" class="card" id="builder">
+      <button type="submit" name="action" value="run" class="sr-only" tabindex="-1">Run</button>
+      <button type="submit" name="action" value="refresh" class="sr-only" tabindex="-1" id="refresh-btn">Refresh</button>
+      <input type="hidden" name="db" value="{{ db_value }}">
+      <input type="hidden" name="table" value="{{ sel.table }}">
+
+      <div class="section" id="columns">
+        <div class="section-head">
+          <span class="section-title"><svg class="i" viewBox="0 0 24 24"><path d="M9 3v18M15 3v18"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>Columns</span>
+          <span class="hint" id="col-count"></span>
+          <span class="spacer"></span>
+          {% if refs|length > 10 %}<input type="search" class="col-filter" id="col-filter" placeholder="Find column…" autocomplete="off" aria-label="Find column">{% endif %}
+          <button type="button" class="ghost sm" onclick="setColumns(true)">Select all</button>
+          <button type="button" class="ghost sm" onclick="setColumns(false)">None</button>
+        </div>
+        {% for t in query_tables %}
+        {% if query_tables|length > 1 %}<div class="group-label">{{ t.label }} <span class="mono muted">({{ t.alias }})</span></div>{% endif %}
+        <div class="cols">
+          {% for c in t.columns %}{% set ref = t.alias ~ '.' ~ c %}
+          <label class="check mono col"><input type="checkbox" name="columns" value="{{ ref }}" {% if all_selected or ref in selected %}checked{% endif %}>{{ c }}</label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="section-title"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>Joins</span>
+          <span class="hint">up to {{ max_joins }}</span>
+        </div>
+        {% for j in state.joins %}{% set i = loop.index0 %}
+        <div class="line-row">
+          <select name="join_kind" aria-label="Join kind">
+            {% for k in join_kinds %}<option value="{{ k }}" {% if k == j.kind|upper %}selected{% endif %}>{{ k }} JOIN</option>{% endfor %}
+          </select>
+          <select name="join_table" aria-label="Joined table" onchange="refresh(this.form)">
+            {{ stale(j.table, tables) }}
+            {% for key in tables %}<option value="{{ key }}" {% if key == j.table %}selected{% endif %}>{{ key }}</option>{% endfor %}
+          </select>
+          <span class="kw">ON</span>
+          <select name="join_left" aria-label="Column on the left">
+            {% set left_refs = [] %}{% for t in query_tables[:i + 1] %}{% for c in t.columns %}{% set _ = left_refs.append(t.alias ~ '.' ~ c) %}{% endfor %}{% endfor %}
+            <option value="" {% if not j.left %}selected{% endif %}>choose…</option>
+            {{ stale(j.left, left_refs) }}
+            {% for t in query_tables[:i + 1] %}{% for c in t.columns %}{% set ref = t.alias ~ '.' ~ c %}
+            <option value="{{ ref }}" {% if ref == j.left %}selected{% endif %}>{{ ref_label(ref) }}</option>
+            {% endfor %}{% endfor %}
+          </select>
+          <span class="kw">=</span>
+          <select name="join_right" aria-label="Column of the joined table">
+            {% set right_cols = query_tables[i + 1].columns if query_tables|length > i + 1 else [] %}
+            <option value="" {% if not j.right %}selected{% endif %}>choose…</option>
+            {{ stale(j.right, right_cols) }}
+            {% if query_tables|length > i + 1 %}{% for c in query_tables[i + 1].columns %}
+            <option value="{{ c }}" {% if c == j.right %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}{% endif %}
+          </select>
+          <button type="submit" name="action" value="remove_join:{{ i }}" class="ghost icon" title="Remove join" aria-label="Remove join">✕</button>
+        </div>
+        {% endfor %}
+        <div class="row">
+          {% if state.joins|length < max_joins %}<button type="submit" name="action" value="add_join" class="sm">+ Join</button>{% endif %}
+          {% for s in (suggestions or []) if state.joins|length < max_joins %}
+          <button type="submit" name="action" value="suggest:{{ loop.index0 }}" class="chip" title="Foreign key {{ s.via }}">
+            ↔ {{ s.table }} <span class="mono">({{ s.left }} = {{ s.right }})</span>
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span class="section-title"><svg class="i" viewBox="0 0 24 24"><path d="M18 4H6l6 8-6 8h12"/></svg>Aggregates</span>
+          <span class="hint">selected columns become the GROUP BY</span>
+        </div>
+        {% for a in state.aggregates %}
+        <div class="line-row">
+          <select name="agg_func" aria-label="Aggregate function">
+            {% for f in aggregates_list %}<option value="{{ f }}" {% if f == a.func|upper %}selected{% endif %}>{{ f }}</option>{% endfor %}
+          </select>
+          <select name="agg_column" aria-label="Aggregate column">
+            <option value="">—</option>
+            {{ stale(a.column, refs) }}
+            {% for ref in refs %}<option value="{{ ref }}" {% if ref == a.column %}selected{% endif %}>{{ ref_label(ref) }}</option>{% endfor %}
+          </select>
+          <button type="submit" name="action" value="remove_agg:{{ loop.index0 }}" class="ghost icon" title="Remove aggregate" aria-label="Remove aggregate">✕</button>
+        </div>
+        {% endfor %}
+        <div class="row"><button type="submit" name="action" value="add_agg" class="sm">+ Aggregate</button></div>
+      </div>
+
+      <div class="section" id="filters">
+        <div class="section-head">
+          <span class="section-title"><svg class="i" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8Z"/></svg>Filters</span>
+          <span class="hint">combined with AND</span>
+        </div>
+        {% for f in state.filters + [{"column": "", "op": "=", "value": ""}] %}
+        <div class="line-row filter">
+          <select name="filter_column" aria-label="Filter column">
+            <option value="">(none)</option>
+            {{ stale(f.column, refs) }}
+            {% for ref in refs %}<option value="{{ ref }}" {% if ref == f.column %}selected{% endif %}>{{ ref_label(ref) }}</option>{% endfor %}
+          </select>
+          <select name="filter_op" aria-label="Operator">
+            {% for op in operators %}<option value="{{ op }}" {% if op == f.op|upper %}selected{% endif %}>{{ op }}</option>{% endfor %}
+          </select>
+          <input name="filter_value" value="{{ f.value }}" placeholder="value · comma-separated for IN" style="min-width:16ch; flex:1;">
+          <button type="button" class="ghost icon" onclick="removeFilter(this)" title="Remove filter" aria-label="Remove filter">✕</button>
+        </div>
+        {% endfor %}
+        <div class="row"><button type="button" class="sm" onclick="addFilter()">+ Filter</button></div>
+      </div>
+
+      <div class="toolbar">
+        <label class="inline">Sort
+          <select name="order_by" aria-label="Sort by">
+            <option value="">(none)</option>
+            {{ stale(state.order_by, refs + agg_labels) }}
+            {% for label in agg_labels %}<option value="{{ label }}" {% if label == state.order_by %}selected{% endif %}>{{ label }}</option>{% endfor %}
+            {% for ref in refs %}<option value="{{ ref }}" {% if ref == state.order_by %}selected{% endif %}>{{ ref_label(ref) }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="switch"><input type="checkbox" name="descending" value="1" {% if state.descending %}checked{% endif %}> desc</label>
+        <label class="inline">Limit <input name="limit" type="number" min="1" max="{{ max_rows }}" value="{{ state.limit }}" style="width:8ch;"></label>
+        <span class="spacer"></span>
+        <button type="submit" name="action" value="explain" title="Show the query plan without running it">
+          <svg class="i" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Explain</button>
+        <button type="submit" name="action" value="run" class="primary" id="run-btn" title="Run query (Ctrl+Enter)">
+          <svg class="i" viewBox="0 0 24 24"><path d="m6 4 14 8-14 8Z"/></svg>Run query <kbd>Ctrl ↵</kbd></button>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if tab == "structure" or tab == "indexes" %}
+    {% if info_error %}<p class="error">{{ info_error }}</p>{% endif %}
+    {% if info and tab == "structure" %}
+    <section class="card stack">
+      <h2>Columns <span class="pill" style="margin-left:4px;">{{ info.columns|length }}</span></h2>
+      <div class="table-wrap"><table class="grid">
+        <thead><tr><th>#</th><th>Column</th><th>Type</th><th>Nullable</th><th>Default</th></tr></thead>
+        <tbody>{% for c in info.columns %}
+          <tr><td class="num">{{ loop.index }}</td><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ 'yes' if c.nullable else 'no' }}</td>
+              <td class="{{ 'null' if c.default is none }}">{{ c.default if c.default is not none else '—' }}</td></tr>
+        {% endfor %}</tbody>
+      </table></div>
+      <h2>Constraints</h2>
+      {% if info.constraints %}
+      <div class="table-wrap"><table class="grid">
+        <thead><tr><th>Name</th><th>Kind</th><th>Direction</th><th>Definition</th></tr></thead>
+        <tbody>{% for c in info.constraints %}
+          <tr><td>{{ c.name }}</td><td>{{ c.kind }}</td>
+              <td>{% if c.direction == 'in' %}← from {{ c.table }}{% else %}this table{% endif %}</td><td>{{ c.definition }}</td></tr>
+        {% endfor %}</tbody>
+      </table></div>
+      {% else %}<p class="muted">No constraints.</p>{% endif %}
+    </section>
+    {% endif %}
+    {% if info and tab == "indexes" %}
+    <section class="card stack">
+      <h2>Indexes</h2>
+      {% if info.indexes %}
+      <div class="table-wrap"><table class="grid">
+        <thead><tr><th>Name</th><th>Method</th><th>Unique</th><th>Primary</th><th>Size</th><th>Scans</th><th>Definition</th></tr></thead>
+        <tbody>{% for i in info.indexes %}
+          <tr><td>{{ i.name }}</td><td>{{ i.method }}</td><td>{{ 'yes' if i.unique else 'no' }}</td><td>{{ 'yes' if i.primary else 'no' }}</td>
+              <td class="num">{{ i.size }}</td><td class="num {{ 'null' if i.scans is none }}">{{ i.scans if i.scans is not none else '—' }}</td>
+              <td>{{ i.definition }}</td></tr>
+        {% endfor %}</tbody>
+      </table></div>
+      <p class="muted" style="margin:0;">Scans count since statistics were last reset; 0 means the planner hasn't used the index.</p>
+      {% else %}<p class="muted">No indexes.</p>{% endif %}
+    </section>
+    {% endif %}
+    {% endif %}
+    {% else %}
+    <section class="card empty-state">
+      <span class="ticon">{% if sel.database %}<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10"/></svg>{% else %}<svg class="i" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>{% endif %}</span>
+      <h1>{% if sel.database %}Pick a table{% else %}Pick a database{% endif %}</h1>
+      <p class="muted" style="margin:0;">Everything here is read-only: queries run inside a read-only transaction that is rolled back, with a time limit.</p>
+    </section>
+    {% endif %}
+
+    {% if result %}
+    <section class="card result-card" id="result">
+      {% if result.error %}
+      <div class="body"><p class="error">{{ result.error }}</p></div>
+      {% elif result.plan %}
+      <div class="meta"><h2>Query plan</h2><span class="pill">{{ result.duration_ms }} ms</span><span class="pill">not executed</span></div>
+      <div class="body">
+        <pre>{{ result.plan|join('\n') }}</pre>
+        <details><summary class="muted">SQL</summary><pre>{{ result.sql }}</pre><pre class="muted">params: {{ result.params }}</pre></details>
+      </div>
+      {% else %}
+      <div class="meta">
+        <h2>Result</h2>
+        <span class="pill brand">{{ result.rows|length }} row{{ '' if result.rows|length == 1 else 's' }}</span>
+        <span class="pill">{{ result.duration_ms }} ms</span>
+        <span class="spacer"></span>
+        {% if result.rows %}<span class="hint">click a cell to expand · double-click to copy</span>{% endif %}
+        <button type="button" class="sm" onclick="copyCsv(this)"><svg class="i" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>Copy as CSV</button>
+        <button type="button" class="sm" onclick="downloadCsv()"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>Download</button>
+      </div>
+      <textarea id="result-csv" readonly hidden rows="8" class="mono" style="width:100%;">{{ result_csv }}</textarea>
+      {% if result.rows %}
+      <div class="table-wrap"><table class="grid">
+        <thead><tr>{% for c in result.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in result.rows %}
+          <tr>{% for v in row %}<td class="cell{{ ' null' if v is none }}{{ ' num' if v is number and v is not boolean }}" title="Click to expand">{{ 'NULL' if v is none else v }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+      {% else %}<div class="body"><p class="muted" style="margin:0;">No rows match.</p></div>{% endif %}
+      <div class="foot"><details><summary class="muted">SQL</summary><pre>{{ result.sql }}</pre><pre class="muted">params: {{ result.params }}</pre></details></div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if saved %}
+    <section class="card stack">
+      <h2>Saved queries</h2>
+      {% for q in saved %}
+      <form method="post" action="/saved/run" class="saved-row">
+        <input type="hidden" name="key" value="{{ q.key }}">
+        <strong>{{ q.title }}</strong><span class="pill mono">{{ q.instance }}/{{ q.database }}</span>
+        <span class="spacer"></span>
+        {% for p in q.params %}<input name="param_{{ p }}" value="{{ saved_values.get(p, '') }}" placeholder="{{ p }}" aria-label="{{ p }}">{% endfor %}
+        <button class="primary"><svg class="i" viewBox="0 0 24 24"><path d="m6 4 14 8-14 8Z"/></svg>Run</button>
+      </form>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </main>
+</div>
+<script>
+function refresh(form) { form.requestSubmit(document.getElementById('refresh-btn')); }
+function addFilter() {
+  const rows = document.querySelectorAll('#filters .filter');
+  const copy = rows[rows.length - 1].cloneNode(true);
+  copy.querySelectorAll('select').forEach(s => { s.selectedIndex = 0; });
+  copy.querySelector('input').value = '';
+  rows[rows.length - 1].after(copy);
+  copy.querySelector('select').focus();
+}
+function removeFilter(button) {
+  const row = button.closest('.filter');
+  if (document.querySelectorAll('#filters .filter').length > 1) {
+    row.remove();
+  } else {
+    row.querySelectorAll('select').forEach(s => { s.selectedIndex = 0; });
+    row.querySelector('input').value = '';
+  }
+}
+// navigator.clipboard only exists on HTTPS or localhost; juniors on the LAN use plain HTTP.
+function copyText(text) {
+  const fallback = () => {
+    const box = document.createElement('textarea');
+    box.value = text;
+    box.style.position = 'fixed';
+    box.style.opacity = '0';
+    document.body.appendChild(box);
+    box.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    box.remove();
+    return Promise.resolve(ok);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).then(() => true, fallback);
+  }
+  return fallback();
+}
+function copyCsv(button) {
+  const box = document.getElementById('result-csv');
+  copyText(box.value).then(ok => {
+    if (ok) { toast('Copied as CSV'); return; }
+    box.hidden = false;
+    box.select();
+    button.textContent = 'Press Ctrl+C to copy';
+  });
+}
+function downloadCsv() {
+  const box = document.getElementById('result-csv');
+  const name = ({{ (sel.table or 'result')|tojson }}).replace(/[^\w.-]+/g, '_') + '.csv';
+  const url = URL.createObjectURL(new Blob([box.value], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function toggleSidebar() {
+  const shell = document.getElementById('shell');
+  shell.classList.toggle('collapsed');
+  try { localStorage.setItem('dbv-sidebar', shell.classList.contains('collapsed') ? 'collapsed' : 'open'); } catch (e) { /* storage blocked */ }
+}
+try { if (localStorage.getItem('dbv-sidebar') === 'collapsed') document.getElementById('shell').classList.add('collapsed'); } catch (e) { /* storage blocked */ }
+
+const search = document.getElementById('table-search');
+if (search) {
+  const count = document.getElementById('table-count');
+  const total = document.querySelectorAll('#table-list li').length;
+  search.addEventListener('input', () => {
+    const q = search.value.toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#table-list li').forEach(li => {
+      li.hidden = !li.textContent.toLowerCase().includes(q);
+      if (!li.hidden) shown += 1;
+    });
+    count.textContent = q ? shown + ' / ' + total : total;
+  });
+  search.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { search.value = ''; search.dispatchEvent(new Event('input')); search.blur(); }
+    if (e.key === 'Enter') {
+      const first = [...document.querySelectorAll('#table-list li')].find(li => !li.hidden);
+      if (first) first.querySelector('a').click();
+    }
+  });
+  const active = document.querySelector('#table-list a.active');
+  if (active) active.scrollIntoView({ block: 'center' });
+}
+
+const columnBoxes = () => [...document.querySelectorAll('#columns input[name=columns]')];
+function updateColumnCount() {
+  const el = document.getElementById('col-count');
+  if (!el) return;
+  const boxes = columnBoxes();
+  el.textContent = boxes.filter(b => b.checked).length + ' of ' + boxes.length + ' selected';
+}
+function setColumns(on) {
+  columnBoxes().forEach(b => { if (!b.closest('label').hidden) b.checked = on; });
+  updateColumnCount();
+}
+document.addEventListener('change', e => { if (e.target.name === 'columns') updateColumnCount(); });
+updateColumnCount();
+const colFilter = document.getElementById('col-filter');
+if (colFilter) {
+  colFilter.addEventListener('input', () => {
+    const q = colFilter.value.toLowerCase();
+    columnBoxes().forEach(b => { b.closest('label').hidden = !b.closest('label').textContent.toLowerCase().includes(q); });
+  });
+  colFilter.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+}
+
+const builder = document.getElementById('builder');
+if (builder) {
+  builder.addEventListener('submit', e => {
+    const b = e.submitter;
+    if (b && (b.value === 'run' || b.value === 'explain') && !b.classList.contains('sr-only')) b.classList.add('loading');
+    if (b && b.value === 'run' && b.classList.contains('sr-only')) document.getElementById('run-btn').classList.add('loading');
+  });
+}
+window.addEventListener('pageshow', () => document.querySelectorAll('button.loading').forEach(b => b.classList.remove('loading')));
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && builder) {
+    e.preventDefault();
+    builder.requestSubmit(document.getElementById('run-btn'));
+  }
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (e.key === '/' && !typing && search) { e.preventDefault(); search.focus(); search.select(); }
+});
+document.addEventListener('click', e => {
+  if (e.target.matches('td.cell')) e.target.classList.toggle('open');
+});
+document.addEventListener('dblclick', e => {
+  if (!e.target.matches('td.cell')) return;
+  const td = e.target;
+  td.classList.remove('open');
+  const value = td.classList.contains('null') ? '' : td.textContent;
+  copyText(value).then(ok => toast(ok ? 'Copied cell' : 'Copy blocked by the browser'));
+  window.getSelection().removeAllRanges();
+});
+</script>
+{% endblock %}

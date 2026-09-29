@@ -1,0 +1,39 @@
+# Copy to config.yaml and fill in. config.yaml is git-ignored: it holds real hosts and user hashes.
+limits:
+  max_rows: 500
+  default_rows: 50
+  statement_timeout_ms: 15000
+
+instances:
+  local:
+    title: Postgres
+    environment: Local
+    host: postgres
+    port: 5432
+    user: postgres
+    password_env: LOCAL_PG_PW
+    databases: [postgres]
+  qa2_example:
+    title: Example service
+    environment: QA2
+    host: qa2-postgres.example.internal
+    port: 5432
+    user: example_user
+    password_env: QA2_EXAMPLE_PW
+    databases: [example_db]
+
+# Add juniors with: docker run --rm -it -v "$PWD":/app db-viewer-dev python hashpw.py
+users:
+  junior:
+    password_hash: "<paste the hash printed by hashpw.py>"
+
+saved_queries:
+  example_lookup:
+    title: Row by document number
+    instance: qa2_example
+    database: example_db
+    params: [document_number]
+    sql: |
+      SELECT id, document_number, status, created_date
+      FROM example_table
+      WHERE document_number = %(document_number)s
