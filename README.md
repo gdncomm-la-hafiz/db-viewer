@@ -8,13 +8,15 @@ columns and filters; the server builds the SELECT and runs it inside
 
 First time: `cp config.example.yaml config.yaml` and fill in instances and users (config.yaml is git-ignored).
 
-    cd ~/local-infra && docker compose up -d --build --no-deps db-viewer
+    cd {path-to-docker-compose} && docker compose up -d --build --no-deps db-viewer
+
+`{path-to-docker-compose}` is the folder with the `docker-compose.yml` that defines the `db-viewer` service (e.g. `~/local-infra`).
 
 Open http://127.0.0.1:8083. After editing `config.yaml`: `docker compose restart db-viewer`.
 
 ## Add a user
 
-    cd ~/local-infra/db-viewer && docker run --rm -it -v "$PWD":/app db-viewer-dev python hashpw.py
+    cd {path-to-docker-compose}/db-viewer && docker run --rm -it -v "$PWD":/app db-viewer-dev python hashpw.py
 
 Paste the hash under `users:` in `config.yaml`, restart. Remove the entry to revoke access (takes effect on the next request).
 
@@ -53,7 +55,9 @@ In an admin PowerShell on this laptop (the WSL IP changes after a reboot; re-run
 
     docker build --target dev -t db-viewer-dev .
     docker run --rm -v "$PWD":/app db-viewer-dev pytest -q
-    docker run --rm --network local-infra_default --env-file secrets.env -v "$PWD":/app db-viewer-dev pytest -q -m integration
+    docker run --rm --network {compose-project}_default --env-file secrets.env -v "$PWD":/app db-viewer-dev pytest -q -m integration
+
+`{compose-project}` is the compose project name, by default the compose folder name (e.g. `local-infra` → `local-infra_default`).
 
 Integration tests only touch local-postgres: they create their own `dbviewer_test` schema in the `postgres` database
 (dropped only if its comment marks it as theirs) and never use existing tables.
